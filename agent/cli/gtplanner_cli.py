@@ -46,6 +46,7 @@ from agent.cli.cli_text_manager import CLITextManager
 
 # 导入索引管理器
 from agent.utils.startup_init import initialize_application
+from agent.utils.export_planner import PlannerExporter
 
 
 class ModernGTPlannerCLI:
@@ -95,7 +96,10 @@ class ModernGTPlannerCLI:
 
         # 使用新的SQLite会话管理器
         self.session_manager = SQLiteSessionManager()
-        
+
+        # 导出器
+        self.exporter = PlannerExporter(self.session_manager, language=language)
+
         # 流式响应组件
         self.current_streaming_session: Optional[StreamingSession] = None
         self.cli_handler: Optional[CLIStreamHandler] = None
@@ -213,6 +217,7 @@ class ModernGTPlannerCLI:
 - `/sessions` - {self.text_manager.get_text("sessions_command")}
 - `/new` - {self.text_manager.get_text("new_command")}
 - `/load <session_id>` - {self.text_manager.get_text("load_command")}
+- `/save [path]` - 保存当前规划到Markdown文件
 - `/config` - 配置选项
 - `/quit` - {self.text_manager.get_text("quit_command")}
             """
@@ -242,6 +247,7 @@ class ModernGTPlannerCLI:
 - `/sessions` - {self.text_manager.get_text("sessions_command")}
 - `/new` - {self.text_manager.get_text("new_command")}
 - `/load <session_id>` - {self.text_manager.get_text("load_command")}
+- `/save [path]` - Save current planning to Markdown file
 - `/config` - Configuration options
 - `/quit` - {self.text_manager.get_text("quit_command")}
             """
@@ -265,6 +271,7 @@ class ModernGTPlannerCLI:
 - `/sessions` - {self.text_manager.get_text("sessions_command")}
 - `/new` - {self.text_manager.get_text("new_command")}
 - `/load <session_id>` - {self.text_manager.get_text("load_command")}
+- `/save [path]` - Save current planning to Markdown file
 - `/quit` - {self.text_manager.get_text("quit_command")}
             """
     
@@ -293,6 +300,8 @@ class ModernGTPlannerCLI:
 - `/new [title]` - {self.text_manager.get_text("new_command")}
 - `/load <session_id>` - {self.text_manager.get_text("load_command")}
 - `/current` - {self.text_manager.get_text("current_command")}
+- `/save [path]` - 保存当前规划到Markdown文件
+- `/preview` - 预览当前规划内容
 
 ### {self.text_manager.get_text("config_options_help")}
 - `/config` - 显示当前配置
@@ -322,6 +331,8 @@ class ModernGTPlannerCLI:
 - `/new [title]` - {self.text_manager.get_text("new_command")}
 - `/load <session_id>` - {self.text_manager.get_text("load_command")}
 - `/current` - {self.text_manager.get_text("current_command")}
+- `/save [path]` - Save current planning to Markdown file
+- `/preview` - Preview current planning content
 
 ### {self.text_manager.get_text("config_options_help")}
 - `/config` - Show current configuration
@@ -513,6 +524,12 @@ I want to build an online education platform
             else:
                 self.console.print("❌ [red]用法: /metadata on|off[/red]")
 
+        elif cmd == "save":
+            self._save_planning(args)
+
+        elif cmd == "preview":
+            self._preview_planning()
+
         else:
             self.console.print(f"❓ [yellow]未知命令:[/yellow] {cmd}")
             self.console.print("💡 [blue]输入 /help 查看可用命令[/blue]")
@@ -663,6 +680,65 @@ I want to build an online education platform
             border_style="green"
         ))
 
+    def _save_planning(self, args: List[str]):
+        """保存当前规划到Markdown文件"""
+        if not self.session_manager.current_session_id:
+            self.console.print("❌ [red]当前无活跃会话，无法保存[/red]")
+            return
+
+        try:
+            # 解析路径参数
+            # 如果用户提供了参数，将所有参数合并为文件路径
+            # 如果没有提供参数，则 output_path 为 None，系统会自动生成文件名
+            output_path = " ".join(args) if args else None
+
+            # 导出规划
+            saved_path = self.exporter.export_session_to_markdown(
+                output_path=output_path,
+                include_conversation=True
+            )
+
+            # 显示成功信息
+            self.console.print(Panel(
+                f"✅ [green]规划已成功保存到:[/green]\n\n📄 {saved_path}",
+                title="保存成功",
+                border_style="green"
+            ))
+
+        except ValueError as e:
+            self.console.print(f"❌ [red]保存失败:[/red] {str(e)}")
+        except Exception as e:
+            self.console.print(f"💥 [red]保存时发生异常:[/red] {str(e)}")
+            if self.verbose:
+                import traceback
+                self.console.print(traceback.format_exc())
+
+    def _preview_planning(self):
+        """预览当前规划内容"""
+        if not self.session_manager.current_session_id:
+            self.console.print("❌ [red]当前无活跃会话，无法预览[/red]")
+            return
+
+        try:
+            # 获取预览内容
+            preview_content = self.exporter.get_markdown_preview(max_length=1000)
+
+            # 显示预览
+            self.console.print(Panel(
+                Markdown(preview_content),
+                title="📋 规划内容预览",
+                border_style="blue"
+            ))
+
+            # 提示保存命令
+            self.console.print("\n💡 [dim]使用 /save [路径] 命令保存完整规划[/dim]\n")
+
+        except Exception as e:
+            self.console.print(f"💥 [red]预览时发生异常:[/red] {str(e)}")
+            if self.verbose:
+                import traceback
+                self.console.print(traceback.format_exc())
+
     async def _preload_tool_index(self):
         """预加载工具索引"""
         try:
@@ -752,7 +828,7 @@ I want to build an online education platform
         await self.process_user_input(requirement)
 
 
-async def main():
+async def async_main():
     """主函数"""
     parser = argparse.ArgumentParser(description="现代化GTPlanner CLI")
     parser.add_argument("requirement", nargs="?", help="直接处理的需求")
@@ -802,5 +878,17 @@ async def main():
     return 0
 
 
+def main():
+    """Synchronous entry point for the CLI."""
+    try:
+        # Use asyncio.run() to execute the async_main coroutine
+        # and properly handle the event loop.
+        sys.exit(asyncio.run(async_main()))
+    except KeyboardInterrupt:
+        # Handle Ctrl+C gracefully if it happens during setup
+        print("\n👋 User interrupted, goodbye!")
+        sys.exit(0)
+
+
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
+    main()
